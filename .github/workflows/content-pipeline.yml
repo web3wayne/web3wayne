@@ -1,0 +1,78 @@
+name: Weekly content pipeline
+
+on:
+  schedule:
+    # Mondays 14:00 UTC — gives the operator the week to review and post.
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+    inputs:
+      topic_hint:
+        description: 'Optional topic hint to seed research'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        id: run
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -m workflow.main \
+            --topic-hint "${{ github.event.inputs.topic_hint }}" \
+            --output-meta /tmp/meta.json
+          {
+            echo "post_dir=$(jq -r '.post_dir' /tmp/meta.json)"
+            echo "title=$(jq -r '.title' /tmp/meta.json)"
+            echo "slug=$(jq -r '.slug' /tmp/meta.json)"
+            echo "date=$(jq -r '.date' /tmp/meta.json)"
+            echo "scheduled_at=$(jq -r '.scheduled_at' /tmp/meta.json)"
+            echo "char_count=$(jq -r '.char_count' /tmp/meta.json)"
+            echo "image_count=$(jq -r '.image_count' /tmp/meta.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "content: ${{ steps.run.outputs.title }}"
+          branch: content/${{ steps.run.outputs.date }}-${{ steps.run.outputs.slug }}
+          title: "Weekly content: ${{ steps.run.outputs.title }}"
+          body: |
+            Auto-generated weekly content draft.
+
+            **Scheduled:** ${{ steps.run.outputs.scheduled_at }}
+            **Char count:** ${{ steps.run.outputs.char_count }}
+            **Images generated:** ${{ steps.run.outputs.image_count }}
+
+            ### What to do
+            1. Open `${{ steps.run.outputs.post_dir }}/post.txt` and review
+            2. Check `visuals/` for image options (or prompts if no image API key)
+            3. Edit anything that needs tightening, commit on this branch
+            4. Merge to archive — then paste `post.txt` to LinkedIn at the scheduled time
+
+            ### Files
+            - `post.txt` — paste this to LinkedIn
+            - `post.md` — same content with frontmatter
+            - `research.md` / `research.json` — what the researcher found
+            - `visuals/prompts.md` — image prompts (+ PNGs if rendered)
+            - `schedule.json` — posting metadata
+          labels: |
+            content
+            auto-generated
